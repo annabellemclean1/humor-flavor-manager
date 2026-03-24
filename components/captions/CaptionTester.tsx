@@ -1,239 +1,181 @@
 'use client'
-
 import { useState, useRef } from 'react'
-import { processImageFull, processImageFromUrl } from '@/lib/pipeline'
-import { extractCaptionText } from '@/lib/utils'
 import { createClient } from '@/lib/supabase'
+import { runFlavor } from '@/lib/pipeline'
 import { Spinner } from '@/components/ui/Spinner'
 import toast from 'react-hot-toast'
-import type { HumorFlavor } from '@/types'
+import type { HumorFlavor, HumorFlavorStep, CaptionResult } from '@/types'
 
-interface CaptionTesterProps {
+const UPLOAD_STEPS = [
+  'Getting upload URL...',
+  'Uploading image...',
+  'Registering image...',
+  'Generating captions...',
+]
+
+interface Props {
   flavor: HumorFlavor
+  steps: HumorFlavorStep[]
+  pastResults: CaptionResult[]
 }
 
-const SUPPORTED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/heic']
-
-type InputMode = 'upload' | 'url'
-
-interface CaptionResult {
-  imageUrl: string
-  captions: unknown[]
-  error?: string
-}
-
-export function CaptionTester({ flavor }: CaptionTesterProps) {
-  const [mode, setMode] = useState<InputMode>('upload')
-  const [imageUrl, setImageUrl] = useState('')
+export function CaptionTester({ flavor, steps, pastResults }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<CaptionResult | null>(null)
+  const [uploadStep, setUploadStep] = useState<number | null>(null)
+  const [results, setResults] = useState<CaptionResult[]>(pastResults)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const supabase = createClient()
+  const hasSteps = steps.length > 0
+  const loading = uploadStep !== null
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
-    if (!SUPPORTED_TYPES.includes(f.type)) {
-      toast.error(`Unsupported file type: ${f.type}`)
-      return
-    }
     setFile(f)
     setPreviewUrl(URL.createObjectURL(f))
-    setResult(null)
   }
 
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault()
-    const f = e.dataTransfer.files?.[0]
-    if (!f) return
-    if (!SUPPORTED_TYPES.includes(f.type)) {
-      toast.error(`Unsupported file type: ${f.type}`)
-      return
-    }
-    setFile(f)
-    setPreviewUrl(URL.createObjectURL(f))
-    setResult(null)
-  }
+  async function handleRun() {
+    if (!file) return toast.error('Select an image first')
+    if (!hasSteps) return toast.error('Add steps to this flavor first')
 
-  async function handleGenerate() {
+    // Get the current session token
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { toast.error('Not authenticated'); return }
-    const jwt = session.access_token
+    if (!session) return toast.error('Not authenticated')
 
-    setLoading(true)
-    setResult(null)
     try {
-      if (mode === 'upload') {
-        if (!file) { toast.error('Please select an image'); return }
-        const { cdnUrl, captions } = await processImageFull(jwt, file)
-        setResult({ imageUrl: cdnUrl, captions })
-      } else {
-        if (!imageUrl.trim()) { toast.error('Please enter an image URL'); return }
-        const { captions } = await processImageFromUrl(jwt, imageUrl.trim())
-        setResult({ imageUrl: imageUrl.trim(), captions })
-      }
-      toast.success('Captions generated!')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Generation failed'
-      toast.error(msg)
-      setResult({ imageUrl: mode === 'upload' ? previewUrl || '' : imageUrl, captions: [], error: msg })
-    } finally {
-      setLoading(false)
-    }
-  }
+      setUploadStep(0)
 
-  function clearAll() {
-    setFile(null)
-    setPreviewUrl(null)
-    setImageUrl('')
-    setResult(null)
-    if (fileInputRef.current) fileInputRef.current.value = ''
+      const captions = await runFlavor(file, steps, session.access_token)
+
+      setUploadStep(3)
+
+      const { data, error } = await supabase
+        .from('caption_results')
+        .insert({
+          flavor_id: flavor.id,
+          image_url: previewUrl ?? '',
+          captions,
+        })
+        .select().single()
+
+      if (error) throw error
+      setResults([data as CaptionResult, ...results])
+      toast.success(`${captions.length} caption${captions.length !== 1 ? 's' : ''} generated!`)
+
+      setFile(null)
+      setPreviewUrl(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate captions')
+    } finally {
+      setUploadStep(null)
+    }
   }
 
   return (
-    <div className="space-y-5">
-      {/* Mode toggle */}
-      <div className="flex gap-1 bg-stone-100 dark:bg-stone-800 p-1 rounded-lg w-fit">
-        {(['upload', 'url'] as InputMode[]).map((m) => (
-          <button
-            key={m}
-            onClick={() => { setMode(m); clearAll() }}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-              mode === m
-                ? 'bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-sm'
-                : 'text-stone-500 hover:text-stone-700 dark:hover:text-stone-300'
-            }`}
-          >
-            {m === 'upload' ? '📁 Upload' : '🔗 URL'}
-          </button>
-        ))}
+    <div className="space-y-6">
+      {/* Step summary */}
+      <div className="card p-5">
+        <h2 className="label mb-3">Prompt Chain — {steps.length} step{steps.length !== 1 ? 's' : ''}</h2>
+        {!hasSteps ? (
+          <p className="text-sm text-stone-400">
+            No steps configured.{' '}
+            <a href={`/flavors/${flavor.id}`} className="text-brand-500 hover:underline">Add steps first.</a>
+          </p>
+        ) : (
+          <ol className="space-y-2">
+            {steps.map(step => (
+              <li key={step.id} className="flex gap-3 text-sm">
+                <span className="font-bold text-brand-500 shrink-0 font-mono w-4">{step.step_order}.</span>
+                <span className="text-stone-600 dark:text-stone-400 leading-relaxed">{step.prompt}</span>
+              </li>
+            ))}
+          </ol>
+        )}
       </div>
 
-      {mode === 'upload' ? (
-        <div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={SUPPORTED_TYPES.join(',')}
-            onChange={handleFileChange}
-            className="hidden"
-            id="image-upload"
-          />
-          {!file ? (
-            <label
-              htmlFor="image-upload"
-              onDrop={handleDrop}
-              onDragOver={(e) => e.preventDefault()}
-              className="flex flex-col items-center justify-center gap-3 h-36 border-2 border-dashed border-stone-200 dark:border-stone-700 rounded-xl cursor-pointer hover:border-brand-400 dark:hover:border-brand-600 hover:bg-brand-50/30 dark:hover:bg-brand-950/20 transition-all"
-            >
-              <span className="text-2xl">🖼️</span>
-              <div className="text-center">
-                <p className="text-sm font-medium text-stone-600 dark:text-stone-400">Drop image or click to browse</p>
-                <p className="text-xs text-stone-400 dark:text-stone-500 mt-0.5">JPEG, PNG, WebP, GIF, HEIC</p>
-              </div>
-            </label>
-          ) : (
-            <div className="flex items-start gap-3">
-              {previewUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={previewUrl} alt="Preview" className="w-24 h-24 object-cover rounded-lg border border-stone-200 dark:border-stone-700 shrink-0" />
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-stone-700 dark:text-stone-300 truncate">{file.name}</p>
-                <p className="text-xs text-stone-400 mt-0.5">{(file.size / 1024).toFixed(0)} KB · {file.type}</p>
-                <button onClick={clearAll} className="btn-ghost text-xs mt-2 px-2 py-1">
-                  Change image
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <label className="label">Image URL</label>
-          <input
-            type="url"
-            className="input"
-            placeholder="https://example.com/funny-cat.jpg"
-            value={imageUrl}
-            onChange={(e) => { setImageUrl(e.target.value); setResult(null) }}
-          />
-          {imageUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imageUrl}
-              alt="Preview"
-              className="w-32 h-32 object-cover rounded-lg border border-stone-200 dark:border-stone-700"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-          )}
-        </div>
-      )}
+      {/* Image upload */}
+      <div className="card p-5 space-y-4">
+        <h2 className="label">Test Image</h2>
 
-      <button
-        onClick={handleGenerate}
-        disabled={loading || (mode === 'upload' ? !file : !imageUrl.trim())}
-        className="btn-primary flex items-center gap-2"
-      >
-        {loading ? (
-          <>
-            <Spinner size="sm" />
-            Generating captions…
-          </>
-        ) : (
-          <>
-            <span>✨</span>
-            Generate Captions
-          </>
+        <div
+          onClick={() => !loading && fileInputRef.current?.click()}
+          className={`border-2 border-dashed rounded-xl transition-colors cursor-pointer flex flex-col items-center justify-center gap-2 text-sm
+            ${previewUrl ? 'border-brand-300 dark:border-brand-700 p-2' : 'border-stone-200 dark:border-stone-800 hover:border-brand-400 hover:text-brand-500 p-10 text-stone-400'}
+            ${loading ? 'pointer-events-none opacity-60' : ''}`}
+        >
+          {previewUrl ? (
+            <img src={previewUrl} alt="Preview" className="w-full max-h-64 object-cover rounded-lg" />
+          ) : (
+            <>
+              <span className="text-2xl">🖼️</span>
+              <span>Click to upload an image</span>
+              <span className="text-xs text-stone-400">JPG, PNG, WEBP</span>
+            </>
+          )}
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+
+        {previewUrl && !loading && (
+          <button
+            onClick={() => { setFile(null); setPreviewUrl(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+            className="btn-ghost text-xs w-full"
+          >
+            Clear image
+          </button>
         )}
-      </button>
+
+        {/* Progress indicator */}
+        {loading && uploadStep !== null && (
+          <div className="space-y-2">
+            {UPLOAD_STEPS.map((label, i) => (
+              <div key={i} className={`flex items-center gap-2 text-xs transition-colors ${
+                i < uploadStep ? 'text-brand-500' :
+                i === uploadStep ? 'text-stone-700 dark:text-stone-300 font-medium' :
+                'text-stone-300 dark:text-stone-700'
+              }`}>
+                <span>{i < uploadStep ? '✓' : i === uploadStep ? '⟳' : '○'}</span>
+                {label}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={handleRun}
+          disabled={loading || !hasSteps || !file}
+          className="btn-primary w-full py-2.5 flex items-center justify-center gap-2"
+        >
+          {loading ? <><Spinner className="w-4 h-4" /> {UPLOAD_STEPS[uploadStep ?? 0]}</> : '🚀 Run Flavor'}
+        </button>
+      </div>
 
       {/* Results */}
-      {result && (
-        <div className="animate-slide-up">
-          {result.error ? (
-            <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl p-4 text-sm text-red-600 dark:text-red-400">
-              <strong>Error:</strong> {result.error}
+      {results.length > 0 && (
+        <div className="space-y-4">
+          <h2 className="label">Caption Results</h2>
+          {results.map(result => (
+            <div key={result.id} className="card p-5 space-y-3 animate-slide-up">
+              <p className="text-xs text-stone-400">{new Date(result.created_at).toLocaleString()}</p>
+              <ol className="space-y-2">
+                {(result.captions ?? []).map((caption: string, i: number) => (
+                  <li key={i} className="flex gap-2 text-sm">
+                    <span className="text-brand-500 font-bold font-mono shrink-0">{i + 1}.</span>
+                    <span className="text-stone-700 dark:text-stone-300 leading-relaxed">{caption}</span>
+                  </li>
+                ))}
+              </ol>
             </div>
-          ) : result.captions.length === 0 ? (
-            <div className="text-center py-8 text-stone-400 dark:text-stone-600 text-sm">
-              No captions returned from the API.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <h4 className="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
-                {result.captions.length} caption{result.captions.length !== 1 ? 's' : ''} generated
-              </h4>
-              {result.captions.map((caption, i) => (
-                <div
-                  key={i}
-                  className="card p-3 hover:border-brand-300 dark:hover:border-brand-700 transition-colors"
-                >
-                  <div className="flex items-start gap-3">
-                    <span className="w-6 h-6 rounded-full bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400 text-xs flex items-center justify-center font-mono shrink-0">
-                      {i + 1}
-                    </span>
-                    <p className="text-sm text-stone-700 dark:text-stone-300 leading-relaxed">
-                      {extractCaptionText(caption)}
-                    </p>
-                  </div>
-                  {/* Show raw if it's an object with extra fields */}
-                  {typeof caption === 'object' && caption !== null && Object.keys(caption as object).length > 2 && (
-                    <details className="mt-2">
-                      <summary className="text-xs text-stone-400 cursor-pointer hover:text-stone-600 dark:hover:text-stone-300">
-                        Raw JSON
-                      </summary>
-                      <pre className="text-[10px] bg-stone-50 dark:bg-stone-800 rounded p-2 mt-1 overflow-auto text-stone-500 dark:text-stone-400">
-                        {JSON.stringify(caption, null, 2)}
-                      </pre>
-                    </details>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          ))}
         </div>
       )}
     </div>

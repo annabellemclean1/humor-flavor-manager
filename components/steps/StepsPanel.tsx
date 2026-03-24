@@ -1,163 +1,88 @@
 'use client'
-
-import { useState, useCallback } from 'react'
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-  DragOverlay,
-  DragStartEvent,
-} from '@dnd-kit/core'
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-  arrayMove,
-} from '@dnd-kit/sortable'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase'
 import { StepCard } from './StepCard'
 import { StepForm } from './StepForm'
-import { createClient } from '@/lib/supabase'
 import toast from 'react-hot-toast'
-import type { HumorFlavorStep, LLMModel, LLMInputType, LLMOutputType, HumorFlavorStepType } from '@/types'
+import type { HumorFlavorStep } from '@/types'
 
-interface StepsPanelProps {
-  flavorId: number
-  steps: HumorFlavorStep[]
-  onStepsChange: () => void
-  models: LLMModel[]
-  inputTypes: LLMInputType[]
-  outputTypes: LLMOutputType[]
-  stepTypes: HumorFlavorStepType[]
-}
-
-export function StepsPanel({
-  flavorId, steps, onStepsChange, models, inputTypes, outputTypes, stepTypes,
-}: StepsPanelProps) {
-  const [formOpen, setFormOpen] = useState(false)
-  const [editingStep, setEditingStep] = useState<HumorFlavorStep | null>(null)
-  const [activeId, setActiveId] = useState<number | null>(null)
+export function StepsPanel({ flavorId, steps: initial }: { flavorId: string; steps: HumorFlavorStep[] }) {
+  const [steps, setSteps] = useState(initial)
+  const [addingNew, setAddingNew] = useState(false)
+  const router = useRouter()
   const supabase = createClient()
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  )
+  async function handleMove(step: HumorFlavorStep, dir: 'up' | 'down') {
+    const idx = steps.findIndex(s => s.id === step.id)
+    const swapIdx = dir === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= steps.length) return
+    const other = steps[swapIdx]
 
-  function handleDragStart(event: DragStartEvent) {
-    setActiveId(event.active.id as number)
+    const updated = steps.map(s => {
+      if (s.id === step.id) return { ...s, step_order: other.step_order }
+      if (s.id === other.id) return { ...s, step_order: step.step_order }
+      return s
+    }).sort((a, b) => a.step_order - b.step_order)
+    setSteps(updated)
+
+    const [r1, r2] = await Promise.all([
+      supabase.from('humor_flavor_steps').update({ step_order: other.step_order }).eq('id', step.id),
+      supabase.from('humor_flavor_steps').update({ step_order: step.step_order }).eq('id', other.id),
+    ])
+    if (r1.error || r2.error) {
+      toast.error('Failed to reorder')
+      setSteps(initial)
+    }
+    router.refresh()
   }
 
-  const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
-      setActiveId(null)
-      const { active, over } = event
-      if (!over || active.id === over.id) return
-
-      const oldIndex = steps.findIndex((s) => s.id === active.id)
-      const newIndex = steps.findIndex((s) => s.id === over.id)
-      const reordered = arrayMove(steps, oldIndex, newIndex)
-
-      // Optimistic update is handled by parent re-fetch
-      // Persist new order_by values
-      try {
-        const updates = reordered.map((step, i) =>
-          supabase
-            .from('humor_flavor_steps')
-            .update({ order_by: i + 1 })
-            .eq('id', step.id)
-        )
-        const results = await Promise.all(updates)
-        const err = results.find((r) => r.error)
-        if (err?.error) throw err.error
-        toast.success('Order saved')
-        onStepsChange()
-      } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : 'Reorder failed')
-      }
-    },
-    [steps, supabase, onStepsChange]
-  )
-
-  const activeStep = steps.find((s) => s.id === activeId)
+  async function handleDelete(id: string) {
+    if (!confirm('Delete this step?')) return
+    const { error } = await supabase.from('humor_flavor_steps').delete().eq('id', id)
+    if (error) return toast.error(error.message)
+    setSteps(steps.filter(s => s.id !== id))
+    toast.success('Step deleted')
+    router.refresh()
+  }
 
   return (
-    <div className="flex flex-col gap-3">
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={steps.map((s) => s.id)}
-          strategy={verticalListSortingStrategy}
-        >
-          {steps.map((step, index) => (
-            <StepCard
-              key={step.id}
-              step={step}
-              index={index}
-              models={models}
-              inputTypes={inputTypes}
-              outputTypes={outputTypes}
-              stepTypes={stepTypes}
-              onEdit={() => { setEditingStep(step); setFormOpen(true) }}
-              onDeleted={onStepsChange}
-            />
-          ))}
-        </SortableContext>
-
-        <DragOverlay>
-          {activeStep ? (
-            <div className="dnd-overlay">
-              <StepCard
-                step={activeStep}
-                index={steps.findIndex((s) => s.id === activeStep.id)}
-                models={models}
-                inputTypes={inputTypes}
-                outputTypes={outputTypes}
-                stepTypes={stepTypes}
-                onEdit={() => {}}
-                onDeleted={() => {}}
-              />
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
-
-      {steps.length === 0 && (
-        <div className="text-center py-12 text-stone-400 dark:text-stone-600">
-          <div className="text-3xl mb-2">🪜</div>
-          <p className="text-sm">No steps yet. Add your first step below.</p>
-        </div>
+    <div className="space-y-3">
+      {steps.length === 0 && !addingNew && (
+        <p className="text-sm text-stone-400 dark:text-stone-600 text-center py-8 border-2 border-dashed border-stone-200 dark:border-stone-800 rounded-xl">
+          No steps yet — add your first step below.
+        </p>
       )}
 
-      <button
-        onClick={() => { setEditingStep(null); setFormOpen(true) }}
-        className="btn-secondary flex items-center justify-center gap-2 border-dashed border border-stone-300 dark:border-stone-700 hover:border-brand-400 dark:hover:border-brand-600 hover:text-brand-600 dark:hover:text-brand-400"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-        </svg>
-        Add Step {steps.length + 1}
-      </button>
+      {steps.map((step, idx) => (
+        <StepCard
+          key={step.id}
+          step={step}
+          isFirst={idx === 0}
+          isLast={idx === steps.length - 1}
+          onUpdate={updated => setSteps(steps.map(s => s.id === updated.id ? updated : s))}
+          onDelete={handleDelete}
+          onMove={handleMove}
+        />
+      ))}
 
-      <StepForm
-        open={formOpen}
-        onClose={() => { setFormOpen(false); setEditingStep(null) }}
-        onSaved={onStepsChange}
-        flavorId={flavorId}
-        step={editingStep}
-        nextOrder={steps.length + 1}
-        models={models}
-        inputTypes={inputTypes}
-        outputTypes={outputTypes}
-        stepTypes={stepTypes}
-      />
+      {addingNew ? (
+        <div className="card p-4 animate-slide-up">
+          <StepForm
+            flavorId={flavorId}
+            nextOrder={steps.length + 1}
+            onDone={newStep => { setSteps([...steps, newStep]); setAddingNew(false); router.refresh() }}
+            onCancel={() => setAddingNew(false)}
+          />
+        </div>
+      ) : (
+        <button
+          onClick={() => setAddingNew(true)}
+          className="w-full py-3 rounded-xl border-2 border-dashed border-stone-200 dark:border-stone-800 text-stone-400 hover:border-brand-400 hover:text-brand-500 transition-colors text-sm font-medium"
+        >
+          + Add Step
+        </button>
+      )}
     </div>
   )
 }

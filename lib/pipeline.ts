@@ -1,93 +1,64 @@
-const BASE_URL = 'https://api.almostcrackd.ai'
+// lib/pipeline.ts
 
-export async function generatePresignedUrl(
-  jwt: string,
-  contentType: string
-): Promise<{ presignedUrl: string; cdnUrl: string }> {
-  const res = await fetch(`${BASE_URL}/pipeline/generate-presigned-url`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${jwt}`,
-    },
-    body: JSON.stringify({ contentType }),
-  })
-  if (!res.ok) throw new Error(`Failed to generate presigned URL: ${res.statusText}`)
-  return res.json()
+const API = 'https://api.almostcrackd.ai'
+
+export interface PipelineStep {
+  step_order: number
+  prompt: string
 }
 
-export async function uploadToS3(
-  presignedUrl: string,
-  file: File
-): Promise<void> {
-  const res = await fetch(presignedUrl, {
+/**
+ * Full 3-step pipeline:
+ * 1. Get presigned S3 URL
+ * 2. Upload file to S3
+ * 3. Register image → get imageId
+ * 4. Generate captions using imageId
+ */
+export async function runFlavor(
+  file: File,
+  _steps: PipelineStep[], // reserved for future prompt-chain use
+  authToken: string
+): Promise<string[]> {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${authToken}`,
+  }
+
+  // Step 1: Get presigned upload URL
+  const presignRes = await fetch(`${API}/pipeline/generate-presigned-url`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ contentType: file.type }),
+  })
+  if (!presignRes.ok) throw new Error('Failed to generate upload URL')
+  const { presignedUrl, cdnUrl } = await presignRes.json()
+
+  // Step 2: Upload file directly to S3
+  const uploadRes = await fetch(presignedUrl, {
     method: 'PUT',
     headers: { 'Content-Type': file.type },
     body: file,
   })
-  if (!res.ok) throw new Error(`Failed to upload to S3: ${res.statusText}`)
-}
+  if (!uploadRes.ok) throw new Error('Failed to upload image')
 
-export async function registerImageInPipeline(
-  jwt: string,
-  imageUrl: string
-): Promise<{ imageId: string; now: number }> {
-  const res = await fetch(`${BASE_URL}/pipeline/upload-image-from-url`, {
+  // Step 3: Register image, get imageId
+  const registerRes = await fetch(`${API}/pipeline/upload-image-from-url`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${jwt}`,
-    },
-    body: JSON.stringify({ imageUrl, isCommonUse: false }),
+    headers,
+    body: JSON.stringify({ imageUrl: cdnUrl, isCommonUse: false }),
   })
-  if (!res.ok) throw new Error(`Failed to register image: ${res.statusText}`)
-  return res.json()
-}
+  if (!registerRes.ok) throw new Error('Failed to register image')
+  const { imageId } = await registerRes.json()
 
-export async function generateCaptions(
-  jwt: string,
-  imageId: string
-): Promise<unknown[]> {
-  const res = await fetch(`${BASE_URL}/pipeline/generate-captions`, {
+  // Step 4: Generate captions
+  const captionRes = await fetch(`${API}/pipeline/generate-captions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${jwt}`,
-    },
+    headers,
     body: JSON.stringify({ imageId }),
   })
-  if (!res.ok) throw new Error(`Failed to generate captions: ${res.statusText}`)
-  return res.json()
-}
+  if (!captionRes.ok) throw new Error('Failed to generate captions')
+  const data = await captionRes.json()
 
-export async function processImageFull(
-  jwt: string,
-  file: File
-): Promise<{ imageId: string; cdnUrl: string; captions: unknown[] }> {
-  // Step 1: presigned URL
-  const { presignedUrl, cdnUrl } = await generatePresignedUrl(jwt, file.type)
-
-  // Step 2: upload to S3
-  await uploadToS3(presignedUrl, file)
-
-  // Step 3: register in pipeline
-  const { imageId } = await registerImageInPipeline(jwt, cdnUrl)
-
-  // Step 4: generate captions
-  const captions = await generateCaptions(jwt, imageId)
-
-  return { imageId, cdnUrl, captions }
-}
-
-export async function processImageFromUrl(
-  jwt: string,
-  imageUrl: string
-): Promise<{ imageId: string; captions: unknown[] }> {
-  // Step 3: register in pipeline
-  const { imageId } = await registerImageInPipeline(jwt, imageUrl)
-
-  // Step 4: generate captions
-  const captions = await generateCaptions(jwt, imageId)
-
-  return { imageId, captions }
+  const rows = Array.isArray(data) ? data : [data]
+  return rows.map((c: any) => c.content ?? c)
 }

@@ -1,50 +1,29 @@
 'use client'
-
 import { useTheme } from './ThemeProvider'
-
-const icons = {
-  light: (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="5" strokeWidth={2} />
-      <path strokeWidth={2} strokeLinecap="round" d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-    </svg>
-  ),
-  dark: (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeWidth={2} strokeLinecap="round" d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
-    </svg>
-  ),
-  system: (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <rect x="2" y="3" width="20" height="14" rx="2" strokeWidth={2} />
-      <path strokeWidth={2} strokeLinecap="round" d="M8 21h8M12 17v4" />
-    </svg>
-  ),
-}
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme()
 
-  const options: Array<{ value: 'light' | 'dark' | 'system'; label: string }> = [
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' },
-    { value: 'system', label: 'System' },
+  const options: { value: 'light' | 'dark' | 'system'; icon: string; label: string }[] = [
+    { value: 'light', icon: '☀️', label: 'Light' },
+    { value: 'system', icon: '💻', label: 'System' },
+    { value: 'dark', icon: '🌙', label: 'Dark' },
   ]
 
   return (
-    <div className="flex items-center gap-0.5 bg-stone-100 dark:bg-stone-800 rounded-lg p-0.5">
-      {options.map((opt) => (
+    <div className="flex items-center gap-1 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg">
+      {options.map(o => (
         <button
-          key={opt.value}
-          onClick={() => setTheme(opt.value)}
-          title={opt.label}
-          className={`p-1.5 rounded-md transition-all duration-150 ${
-            theme === opt.value
-              ? 'bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-sm'
+          key={o.value}
+          onClick={() => setTheme(o.value)}
+          title={o.label}
+          className={`px-2 py-1 rounded-md text-xs transition-all ${
+            theme === o.value
+              ? 'bg-white dark:bg-stone-700 shadow-sm text-stone-800 dark:text-stone-100'
               : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
           }`}
         >
-          {icons[opt.value]}
+          {o.icon}
         </button>
       ))}
     </div>

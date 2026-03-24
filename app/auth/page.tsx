@@ -2,34 +2,26 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
 import toast from 'react-hot-toast'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 
 export default function AuthPage() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const router = useRouter()
   const supabase = createClient()
 
   async function handleGoogleSignIn() {
-      setLoading(true)
-      try {
-        const { error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            // This tells Google where to send the user back to
-            redirectTo: `${window.location.origin}/auth/callback`,
-          },
-        })
-        if (error) throw error
-        // Note: The page will redirect away here, so no need for toast/router yet
-      } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : 'Google sign in failed')
-        setLoading(false)
-      }
+    setLoading(true)
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}/auth/callback` },
+      })
+      if (error) throw error
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Sign in failed')
+      setLoading(false)
     }
+  }
 
   return (
     <div className="min-h-screen bg-stone-50 dark:bg-stone-950 flex flex-col">
@@ -38,7 +30,6 @@ export default function AuthPage() {
       </div>
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-sm">
-          {/* Logo / branding */}
           <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center w-14 h-14 bg-brand-500 rounded-2xl mb-4 shadow-lg shadow-brand-500/25">
               <span className="text-2xl">🌶️</span>
@@ -51,16 +42,16 @@ export default function AuthPage() {
             </p>
           </div>
 
-          <div className="card p-6 space-y-4">
+          <div className="card p-6">
             <button
               onClick={handleGoogleSignIn}
               disabled={loading}
-              className="btn-primary w-full justify-center flex items-center gap-3 py-3 font-medium bg-white text-stone-900 border border-stone-200 hover:bg-stone-50 transition-colors shadow-sm"
+              className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 rounded-xl text-sm font-medium text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-750 transition-colors shadow-sm disabled:opacity-50"
             >
               {loading ? (
                 <svg className="w-4 h-4 animate-spin text-brand-500" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                 </svg>
               ) : (
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
